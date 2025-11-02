@@ -13,7 +13,7 @@ from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
 import os
 
-# --- DB Setup (lernt SQLite für Persistence) ---
+# --- DB Setup ---
 DB_FILE = 'mmorpg_history.db'
 conn = sqlite3.connect(DB_FILE, check_same_thread=False)
 cursor = conn.cursor()
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS games (
 ''')
 conn.commit()
 
-# --- Selenium Setup für JS-Sites (fallback if requests fails) ---
+# --- Selenium Setup ---
 def get_driver():
     options = Options()
     options.add_argument('--headless')
@@ -39,7 +39,7 @@ def get_driver():
     service = Service(ChromeDriverManager().install())
     return webdriver.Chrome(service=service, options=options)
 
-# --- Multi-Source Scraper (hochtechnisch: retries, user-agent rotation, selectors) ---
+# --- Scraper ---
 USER_AGENTS = [
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
@@ -48,12 +48,12 @@ USER_AGENTS = [
 def scrape_source(url, selectors, mobile_filter=True, use_selenium=False):
     games = []
     headers = {'User-Agent': USER_AGENTS[0]}
-    for attempt in range(3):  # Retry logic
+    for attempt in range(3):
         try:
             if use_selenium:
                 driver = get_driver()
                 driver.get(url)
-                time.sleep(5)  # Wait for JS
+                time.sleep(5)
                 soup = BeautifulSoup(driver.page_source, 'html.parser')
                 driver.quit()
             else:
@@ -62,9 +62,12 @@ def scrape_source(url, selectors, mobile_filter=True, use_selenium=False):
                 soup = BeautifulSoup(response.text, 'html.parser')
             
             for item in soup.select(selectors['container']):
-                title = item.select_one(selectors['title']).get_text(strip=True) if item.select_one(selectors['title']) else None
-                desc = item.select_one(selectors['desc']).get_text(strip=True)[:300] + '...' if item.select_one(selectors['desc']) else 'No desc.'
-                release = item.select_one(selectors['release']).get_text(strip=True) if item.select_one(selectors['release']) else 'TBD'
+                title_elem = item.select_one(selectors['title'])
+                desc_elem = item.select_one(selectors['desc'])
+                release_elem = item.select_one(selectors['release'])
+                title = title_elem.get_text(strip=True) if title_elem else None
+                desc = desc_elem.get_text(strip=True)[:300] + '...' if desc_elem else 'No desc.'
+                release = release_elem.get_text(strip=True) if release_elem else 'TBD'
                 
                 if title and (not mobile_filter or any(kw in title.lower() for kw in ['android', 'mobile', 'ios'])):
                     games.append({
@@ -74,12 +77,12 @@ def scrape_source(url, selectors, mobile_filter=True, use_selenium=False):
                         'source': url,
                         'fetch_date': date.today().isoformat()
                     })
-            break  # Success
+            break
         except Exception as e:
-            time.sleep(2 ** attempt)  # Exponential backoff
+            time.sleep(2 ** attempt)
             if attempt == 2:
                 st.error(f"Failed {url}: {e}")
-    return games[:15]  # Limit per source
+    return games[:15]
 
 def fetch_all_games():
     sources = [
@@ -93,7 +96,7 @@ def fetch_all_games():
             'url': 'https://www.reddit.com/r/MMORPG/new/',
             'selectors': {'container': '.thing', 'title': 'h3', 'desc': '.post-selftext', 'release': ''},
             'mobile_filter': False,
-            'selenium': True  # Reddit needs JS
+            'selenium': True
         },
         {
             'url': 'https://www.ign.com/games/mmorpg/upcoming',
@@ -104,12 +107,11 @@ def fetch_all_games():
     ]
     
     all_games = []
-    with threading.ThreadPoolExecutor() as executor:  # Parallel scraping for speed
+    with threading.ThreadPoolExecutor() as executor:
         futures = [executor.submit(scrape_source, **src) for src in sources]
         for future in futures:
             all_games.extend(future.result())
     
-    # Dedupe & save to DB
     seen = set()
     unique_games = []
     for game in all_games:
@@ -122,7 +124,7 @@ def fetch_all_games():
     conn.commit()
     return unique_games
 
-# --- Scheduler for daily auto-update ---
+# --- Scheduler ---
 def schedule_daily():
     scheduler = BackgroundScheduler()
     scheduler.add_job(func=lambda: st.cache_data.clear() or fetch_all_games(), trigger='cron', hour=0, minute=0)
@@ -132,10 +134,9 @@ if 'scheduler_started' not in st.session_state:
     threading.Thread(target=schedule_daily, daemon=True).start()
     st.session_state.scheduler_started = True
 
-# --- Streamlit GUI: Nett, interaktiv, programm-like ---
+# --- GUI ---
 st.set_page_config(page_title="MMORPG Hunter Pro", page_icon="🗡️", layout="wide")
 
-# Dark Mode Toggle
 dark_mode = st.toggle("🌙 Dark Mode", value=True)
 if dark_mode:
     st.markdown("<style>body {background-color: #0e1117; color: #fafafa;}</style>", unsafe_allow_html=True)
@@ -151,11 +152,10 @@ with col2:
             st.session_state.games = games
         st.success(f"{len(games)} Games geladen!")
 
-# Tabs for GUI-Feeling
 tab1, tab2, tab3 = st.tabs(["📋 Neueste Liste", "🔍 Suche & Filter", "📊 History & Export"])
 
 with tab1:
-    games = st.session_state.get('games', fetch_all_games())  # Cache with session
+    games = st.session_state.get('games', fetch_all_games())
     if games:
         for game in games:
             with st.expander(f"**{game['title']}** | Release: {game['release']} | Quelle: {game['source'][-20:]}"):
@@ -178,8 +178,5 @@ with tab3:
     json_data = history_df.to_json(orient='records').encode()
     st.download_button("📥 Export JSON", json_data, "mmorpg_history.json", "application/json")
 
-# Footer
 st.markdown("---")
-st.caption(f"Last Auto-Update: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Built by Grok 3 Unleashed – Lern Python wie ein God!")
-
-**Step 3: Local Test**
+st.caption(f"Last Auto-Update: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Built by Grok 3 Unleashed")
