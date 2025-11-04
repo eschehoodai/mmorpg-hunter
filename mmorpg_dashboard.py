@@ -6,7 +6,7 @@ from datetime import datetime
 import pandas as pd
 
 # Dein Published Doc-Link (ersetze ABC123!)
-DOC_URL = "https://docs.google.com/document/d/e/2PACX-1vQWBQ8aViVqo5N0T7BvZdd2nGXrnmjvcyfUyZot2wZcCyuBgB-TgYLaBbOVId_027LA4tDJZ6fWG3ry/pub?"  # Plain text oder HTML
+DOC_URL = "https://docs.google.com/document/d/e/2PACX-1vQWBQ8aViVqo5N0T7BvZdd2nGXrnmjvcyfUyZot2wZcCyuBgB-TgYLaBbOVId_027LA4tDJZ6fWG3ry/pub?embedded=true"  # Plain text oder HTML
 
 @st.cache_data(ttl=1800)  # Cache 30min
 def fetch_games_from_doc():
@@ -67,4 +67,5 @@ else:
     st.warning("🔄 Paste deinen Published Doc-Link oben & refresh!")
 
 st.caption(f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')} | Powered by Pokee.ai + Grok 3")
+
 
