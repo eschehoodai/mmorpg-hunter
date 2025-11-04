@@ -8,11 +8,7 @@ import pandas as pd
 
 # ----------------------------
 # Konfiguration: setze hier deine signierte GCS-URL oder eine andere öffentlich erreichbare HTML-Datei
-# Beispiel: DOC_URL = "https://storage.googleapis.com/....html?X-Goog-Algorithm=..."
-# Wenn du stattdessen eine lokale Datei verwenden willst, lasse DOC_URL leer und kopiere die Datei
-# published_doc.html in das gleiche Verzeichnis wie dieses Script.
-# ----------------------------
-DOC_URL = "https://storage.googleapis.com/pokee-api-bucket/user_350nB0KCk3rbjsg6f3VE8EMa63v/021c9724-294c-4c28-9de4-938f11c8ae8b/html_report.html?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=pokee-storage-access%40verdant-option-419105.iam.gserviceaccount.com%2F20251104%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20251104T230505Z&X-Goog-Expires=604799&X-Goog-SignedHeaders=host&X-Goog-Signature=67951e345bfcf3f96ce6d56502a969e467b255ff08c4205b3b596b98047a33c2a107b23d2780a264d8215c50e2e4a70eb740a96be303829be010375badf161d46c425157a118a686e58eca1806c6992012e09c34b9cd9c370a3651ff8521d118a83b01d1e0965e7785037d59e44e1dceae8048bb22e3e806bce9f705e63b457ec0a327f902d8903a9c38cfcd39355f796d52b34a0c199c7bec5d4230b92653491dbc89653b39901818b9cde279ae078b531730e850190ecc65aab8a13b5d485c0aa7af835c06fac34a3cd44a15241d707b841540ee3c391514095b807af6296cd70beea2531c864f0cb2b91acf2800589a075b3965f87bef90131650de256a95"  # <-- PASTE_HIER_DEINEN_SIGNED_URL (oder leer lassen, wenn du published_doc.html lokal ablegst)
+DOC_URL = "https://storage.googleapis.com/pokee-api-bucket/user_350nB0KCk3rbjsg6f3VE8EMa63v/021c9724-294c-4c28-9de4-938f11c8ae8b/html_report.html?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=pokee-storage-access%40verdant-option-419105.iam.gserviceaccount.com%2F20251104%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20251104T230505Z&X-Goog-Expires=604799&X-Goog-SignedHeaders=host&X-Goog-Signature=67951e345bfcf3f96ce6d56502a969e467b255ff08c4205b3b596b98047a33c2a107b23d2780a264d8215c50e2e4a70eb740a96be303829be010375badf161d46c425157a118a686e58eca1806c6992012e09c34b9cd9c370a3651ff8521d118a83b01d1e0965e7785037d59e44e1dceae8048bb22e3e806bce9f705e63b457ec0a327f902d8903a9c38cfcd39355f796d52b34a0c199c7bec5d4230b92653491dbc89653b39901818b9cde279ae078b531730e850190ecc65aab8a13b5d485c0aa7af835c06fac34a3cd44a15241d707b841540ee3c391514095b807af6296cd70beea2531c864f0cb2b91acf2800589a075b3965f87bef90131650de256a95"
 LOCAL_CACHE = "published_doc.html"
 # ----------------------------
 
@@ -22,34 +18,70 @@ def fetch_remote_and_cache(url: str, local_path: str = LOCAL_CACHE, force_downlo
     Falls die lokale Datei vorhanden ist und force_download == False, wird die lokale Datei verwendet.
     Rückgabe: (html_text, status_code)
     """
-    # Wenn keine URL gesetzt ist, versuche lokale Datei zu lesen
     if not url:
         if os.path.exists(local_path):
             with open(local_path, "r", encoding="utf-8") as f:
                 return f.read(), 200
         raise RuntimeError("Keine DOC_URL gesetzt und lokale Datei not found: " + local_path)
 
-    # Falls lokale Cache existiert und keine Forcierung, nutze sie
     if os.path.exists(local_path) and not force_download:
         try:
             with open(local_path, "r", encoding="utf-8") as f:
                 return f.read(), 200
         except Exception:
-            # Falls Lesen fehlschlägt, fahre fort und lade neu
             pass
 
-    # Lade remote
     r = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=timeout)
     r.raise_for_status()
     html = r.text
-    # Schreibe Cache
     try:
         with open(local_path, "w", encoding="utf-8") as f:
             f.write(html)
     except Exception:
-        # Falls Schreiben fehlschlägt, trotzdem HTML zurückgeben
         pass
     return html, r.status_code
+
+def extract_fields_from_paragraphs(paragraphs):
+    """
+    Nimmt eine Liste von <p> BeautifulSoup-Elementen und extrahiert
+    Name, Erscheinungsdatum, Genre, Zusammenfassung, Quelle als dict.
+    Arbeitet robust gegen verschiedene HTML-Muster:
+    - <span class="label">Name:</span> VALUE (VALUE als Textknoten)
+    - <span>Label:</span><span>Value</span>
+    - plain text "Name: Value"
+    """
+    if not paragraphs:
+        return {}
+    combined = " ".join(p.get_text(" ", strip=True) for p in paragraphs)
+    # Normalize whitespace
+    combined = re.sub(r'\s+', ' ', combined).strip()
+
+    fields = {}
+    # Define capture patterns with lookahead to next field or end
+    def capture(label_patterns):
+        # label_patterns: list of label words e.g. ['Name']
+        for label in label_patterns:
+            # build regex e.g. Name:\s*(.*?)\s*(?=Erscheinungsdatum:|Genre:|Zusammenfassung:|Quelle:|$)
+            other_labels = ['Name', 'Erscheinungsdatum', 'Release', 'Genre', 'Zusammenfassung', 'Quelle', 'Source', 'Beschreibung']
+            lookahead = '|'.join([re.escape(l) + r':' for l in other_labels if l.lower() != label.lower()])
+            pattern = rf'{re.escape(label)}:\s*(.*?)\s*(?=(?:{lookahead})|$)'
+            m = re.search(pattern, combined, flags=re.IGNORECASE | re.DOTALL)
+            if m:
+                return m.group(1).strip()
+        return None
+
+    fields['name'] = capture(['Name', 'Titel'])
+    fields['release'] = capture(['Erscheinungsdatum', 'Release', 'Datum'])
+    fields['genre'] = capture(['Genre'])
+    summary = capture(['Zusammenfassung', 'Beschreibung', 'Summary'])
+    if summary:
+        summary = summary.strip()
+        if len(summary) > 400:
+            summary = summary[:400].rstrip() + '...'
+    fields['desc'] = summary
+    fields['quelle'] = capture(['Quelle', 'Source'])
+
+    return fields
 
 @st.cache_data(ttl=1800)
 def fetch_games_from_doc(force_download: bool = False):
@@ -59,7 +91,6 @@ def fetch_games_from_doc(force_download: bool = False):
     """
     try:
         html, status = fetch_remote_and_cache(DOC_URL, LOCAL_CACHE, force_download=force_download)
-        # Speichere zuletzt ermittelten HTTP-Status für Debug-UI
         try:
             st.session_state['_last_fetch_status'] = status
         except Exception:
@@ -67,68 +98,71 @@ def fetch_games_from_doc(force_download: bool = False):
 
         soup = BeautifulSoup(html, 'html.parser')
 
-        # Priorisiere Google-Docs-artige Struktur: Suche nach #contents div und h2-Elementen
-        contents = soup.find('div', id='contents') or soup
-        headers = contents.find_all('h2')
+        # Versuche mehrere Section-Strategien:
+        # 1) container mit .game-section (dein Report)
+        # 2) Google-Docs-like: <div id="contents"> und h2 + p blocks
         games = []
         seen = set()
 
-        if headers:
-            for h in headers:
-                title = h.get_text(" ", strip=True)
-                # Sammle folgende <p> bis zur nächsten h2
-                field_paragraphs = []
-                for sib in h.next_siblings:
-                    if getattr(sib, 'name', None) == 'h2':
-                        break
-                    if getattr(sib, 'name', None) == 'p':
-                        text = sib.get_text(" ", strip=True)
-                        if text:
-                            field_paragraphs.append(sib)
-
-                # Parse Felder aus den <p> (häufig: <span class="c1">Name:</span><span> Wert</span>)
-                parsed = {}
-                for p in field_paragraphs:
-                    spans = p.find_all('span')
-                    if len(spans) >= 2:
-                        key = spans[0].get_text(" ", strip=True).rstrip(':').strip()
-                        val = " ".join(s.get_text(" ", strip=True) for s in spans[1:]).strip()
-                    else:
-                        full = p.get_text(" ", strip=True)
-                        m = re.match(r'^(.*?):\s*(.+)$', full)
-                        if m:
-                            key, val = m.group(1).strip(), m.group(2).strip()
-                        else:
-                            continue
-                    parsed[key.lower()] = val
-
-                # Name fallback: parsed name or h2 title
-                name = parsed.get('name') or title or parsed.get('titel')
+        # Strategy 1: game-section blocks
+        gs = soup.find_all('div', class_='game-section')
+        if gs:
+            for block in gs:
+                h2 = block.find('h2')
+                title = h2.get_text(" ", strip=True) if h2 else None
+                # collect all p tags inside block
+                ps = block.find_all('p')
+                parsed = extract_fields_from_paragraphs(ps)
+                name = parsed.get('name') or title
                 if not name:
                     continue
                 if name in seen:
                     continue
                 seen.add(name)
-
-                desc_text = parsed.get('zusammenfassung') or parsed.get('beschreibung') or ''
-                if desc_text and len(desc_text) > 400:
-                    desc_text = desc_text[:400].rstrip() + '...'
-
                 game = {
                     'name': name,
-                    'release': parsed.get('erscheinungsdatum') or parsed.get('release') or 'TBD',
+                    'release': parsed.get('release') or 'TBD',
                     'genre': parsed.get('genre') or 'Unknown',
-                    'desc': desc_text or 'No desc.',
+                    'desc': parsed.get('desc') or 'No desc.',
                     'quelle': parsed.get('quelle') or 'Unknown'
                 }
                 games.append(game)
 
-        # Fallback: falls keine h2 gefunden oder kein Ergebnis -> altes Text-Fallback (## Split)
+        # Strategy 2: Google-Docs-like h2 + following p blocks
+        if not games:
+            contents = soup.find('div', id='contents') or soup
+            headers = contents.find_all('h2')
+            if headers:
+                for h in headers:
+                    title = h.get_text(" ", strip=True)
+                    # gather following <p> until next h2
+                    field_paragraphs = []
+                    for sib in h.next_siblings:
+                        if getattr(sib, 'name', None) == 'h2':
+                            break
+                        if getattr(sib, 'name', None) == 'p':
+                            text = sib.get_text(" ", strip=True)
+                            if text:
+                                field_paragraphs.append(sib)
+                    parsed = extract_fields_from_paragraphs(field_paragraphs)
+                    name = parsed.get('name') or title
+                    if not name or name in seen:
+                        continue
+                    seen.add(name)
+                    game = {
+                        'name': name,
+                        'release': parsed.get('release') or 'TBD',
+                        'genre': parsed.get('genre') or 'Unknown',
+                        'desc': parsed.get('desc') or 'No desc.',
+                        'quelle': parsed.get('quelle') or 'Unknown'
+                    }
+                    games.append(game)
+
+        # Strategy 3: fallback to ##-split plain text
         if not games:
             text = soup.get_text('\n')
             text = re.sub(r'Neueste Online-PC-Spiele.*?(?=##)', '', text, flags=re.DOTALL | re.IGNORECASE)
             sections = re.split(r'\n##\s*', text)[1:]
-            seen_titles = set()
             for section in sections:
                 lines = [l.strip() for l in section.split('\n') if l.strip()]
                 if not lines:
@@ -139,9 +173,9 @@ def fetch_games_from_doc(force_download: bool = False):
                 desc = re.search(r'Zusammenfassung:\s*(.+?)(?=\nQuelle:|$)', section, re.DOTALL | re.IGNORECASE)
                 quelle = re.search(r'Quelle:\s*(.+?)(?=\n|$)', section, flags=re.IGNORECASE)
                 title = name.group(1).strip() if name else lines[0].strip()
-                if title in seen_titles:
+                if title in seen:
                     continue
-                seen_titles.add(title)
+                seen.add(title)
                 desc_val = (desc.group(1).strip()[:400] + '...') if desc else 'No desc.'
                 games.append({
                     'name': title,
@@ -151,10 +185,8 @@ def fetch_games_from_doc(force_download: bool = False):
                     'quelle': quelle.group(1).strip() if quelle else 'Unknown'
                 })
 
-        # Optional: limitieren, falls zu viele Einträge
         return games[:200]
     except Exception as e:
-        # Wir geben eine klare Fehlermeldung zurück, damit die UI sie anzeigt.
         raise RuntimeError(f"Fehler beim Abrufen/Parsen des Dokuments: {e}") from e
 
 # ----------------------------
@@ -194,7 +226,6 @@ if show_debug:
     else:
         st.write("Kein HTTP-Status verfügbar (noch nicht heruntergeladen).")
 
-    # Versuche den lokalen Cache zu zeigen (besser für Signed-URL-Verfall)
     if os.path.exists(LOCAL_CACHE):
         try:
             with open(LOCAL_CACHE, "r", encoding="utf-8") as f:
@@ -203,7 +234,6 @@ if show_debug:
         except Exception as e:
             st.error(f"Fehler beim Lesen des lokalen Caches: {e}")
     else:
-        # Falls kein lokaler Cache vorhanden ist, versuche eine direkte fetch (nur zur Ansicht)
         if DOC_URL:
             try:
                 r = requests.get(DOC_URL, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
